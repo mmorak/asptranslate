@@ -32,11 +32,11 @@
 #include <limits.h>
 #include <string.h>
 
-#include "version.h"
-#include "symbol.h"
-#include "atom.h"
-#include "rule.h"
-#include "io.h"
+#include <liblp/version.h>
+#include <liblp/symbol.h>
+#include <liblp/atom.h>
+#include <liblp/rule.h>
+#include <liblp/io.h>
 
 extern void write_literal_list(int style, FILE *out, char *sep,
 			       int pos_cnt, int *pos,

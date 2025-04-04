@@ -29,11 +29,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "version.h"
-#include "symbol.h"
-#include "atom.h"
-#include "rule.h"
-#include "io.h"
+#include <liblp/version.h>
+#include <liblp/symbol.h>
+#include <liblp/atom.h>
+#include <liblp/rule.h>
+#include <liblp/io.h>
 
 #include "scc.h"
 #include "primitives.h"

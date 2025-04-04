@@ -1,9 +1,0 @@
-*.o
-acyc2solver
-lp2acyc
-lp2normal
-lp2normal2
-lp2sat
-lpreify
-support
-unsat2lp

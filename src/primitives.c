@@ -18,40 +18,40 @@
 */
 
 /*
- * counter.c -- Routines related to counters
+ * primitives.c -- Routines related to counters (for lp2lp)
  *
- * (c) 2002, 2004 Tomi Janhunen
+ * (c) 2002, 2004-2005 Tomi Janhunen
  */
 
 #include <stdlib.h>
 #include <stdio.h>
 
-#include "version.h"
-#include "symbol.h"
-#include "atom.h"
-#include "rule.h"
-#include "io.h"
+#include <liblp/version.h>
+#include <liblp/symbol.h>
+#include <liblp/atom.h>
+#include <liblp/rule.h>
+#include <liblp/io.h>
 
 #include "scc.h"
-#include "counter.h"
+#include "primitives.h"
 
-void _version_counter_c()
+void _version_primitives_c()
 {
-  _version("$RCSfile: counter.c,v $",
-	   "$Date: 2021/05/27 11:43:43 $",
-	   "$Revision: 1.8 $");
+  _version("$RCSfile: primitives.c,v $",
+	   "$Date: 2021/05/27 11:45:37 $",
+	   "$Revision: 1.6 $");
 }
 
 #define RESERVE_ATOMS(counter,count) counter; counter+=count
 
-VTAB *allocate_counters(int *newatom, OCCTAB *reftab)
+VTAB *allocate_counters(int *newatom, OCCTAB *occtab)
 {
-  int count = reftab->count;
+  int count = occtab->count;
   VTAB *rvalue = (VTAB *)malloc(sizeof(VTAB)*(count+1));
   VTAB *new = rvalue;
 
-  while(reftab) {
-    int offset = reftab->offset;
+  while(occtab) {
+    int offset = occtab->offset;
     int i = 0;
 
     new->count = count;
@@ -60,7 +60,7 @@ VTAB *allocate_counters(int *newatom, OCCTAB *reftab)
 
     for(i=1; i<=count; i++) {
       int atom = i+offset;
-      DEF *d = definition(reftab, atom);
+      DEF *d = definition(occtab, atom);
       int scc_size = d->scc_size;
 
       if(scc_size>1) {
@@ -69,14 +69,14 @@ VTAB *allocate_counters(int *newatom, OCCTAB *reftab)
 
 	nvec->length = bits;
 	nvec->counter = RESERVE_ATOMS(*newatom, 2*bits);
-	nvec->successor = RESERVE_ATOMS(*newatom, 2*bits);
+	nvec->successor = RESERVE_ATOMS(*newatom, bits);
 	new->vectors[i] = nvec;
       } else
 	new->vectors[i] = NULL;
     }
 
-    if(reftab = reftab->next) {
-      count = reftab->count;
+    if(occtab = occtab->next) {
+      count = occtab->count;
       new->next = (VTAB *)malloc(sizeof(VTAB)*(count +1));
       new = new->next;
     } else
@@ -126,36 +126,38 @@ void write_atom_if_possible(int style, FILE *out, int atom, ATAB *table)
  */
 
 void generate_sel(int style, FILE *out, int bits,
-		  int atom, ATAB *table, int vec,
-		  int atom2, ATAB *table2)
+		   int atom, ATAB *table, int vec,
+		   int atom2, ATAB *table2)
 {
   int i = 0;
-  int negvec = vec+bits;
+  int negvec = vec+bits; /* Complementary bits */
+
+  /* Here atom2 is used as a positive condition */
 
   if(style == STYLE_READABLE) {
 
-    fprintf(out, "%% Subprogram SEL_%i(", bits);
+    fprintf(out, "%% Subprogram SEL(%i, ", bits);
     write_atom_if_possible(style, out, atom, table);
-    fputs(",", out);
+    fputs(", ", out);
     write_atom_if_possible(style, out, atom2, table2);
     fputs("):\n\n", out);
 
     for(i=0; i<bits; i++) {
-      
+
       fprintf(out, "_one_%i_", i);
       write_atom_if_possible(style, out, atom, table);
-      fprintf(out, " :- not _zero_%i_", i);
-      write_atom_if_possible(style, out, atom, table);
-      fprintf(out, ", not ");
+      fprintf(out, " :- ");
       write_atom_if_possible(style, out, atom2, table2);
+      fprintf(out, ", not _zero_%i_", i);
+      write_atom_if_possible(style, out, atom, table);
       fprintf(out, ".\n");
 
       fprintf(out, "_zero_%i_", i);
       write_atom_if_possible(style, out, atom, table);
-      fprintf(out, " :- not _one_%i_", i);
-      write_atom_if_possible(style, out, atom, table);
-      fprintf(out, ", not ");
+      fprintf(out, " :- ");
       write_atom_if_possible(style, out, atom2, table2);
+      fprintf(out, ", not _one_%i_", i);
+      write_atom_if_possible(style, out, atom, table);
       fprintf(out, ".\n");
 
     }
@@ -166,13 +168,13 @@ void generate_sel(int style, FILE *out, int bits,
 
     int cond = atom2;
 
-    if(table2)
+    if(table)
       cond += table2->shift;
 
     for(i=0; i<bits; i++) {
 
-      fprintf(out, "1 %i 2 2 %i %i\n", vec+i, negvec+i, cond);
-      fprintf(out, "1 %i 2 2 %i %i\n", negvec+i, vec+i, cond);
+      fprintf(out, "1 %i 2 1 %i %i\n", vec+i, negvec+i, cond);
+      fprintf(out, "1 %i 2 1 %i %i\n", negvec+i, vec+i, cond);
 
     }
 
@@ -187,74 +189,68 @@ void generate_sel(int style, FILE *out, int bits,
  */
 
 void generate_nxt(int style, FILE *out, int bits,
-		  int atom, ATAB *table, ATAB *negtable, int vec,
+		  int atom, ATAB *table, int vec,
 		  int atom2, ATAB *table2, int vec2)
 {
   int i = 0;
-  int negvec = vec+bits;
-  int negvec2 = vec2+bits;
+
+  /* Implements ctr2 = NXT(ctr1) */
   
   if(style == STYLE_READABLE) {
 
-    fprintf(out, "%% Subprogram NXT_%i(", bits);
+    fprintf(out, "%% Subprogram NXT(%i, ", bits);
     write_atom_if_possible(style, out, atom, table);
-    fputs(",", out);
+    fputs(", ", out);
     write_atom_if_possible(style, out, atom2, table2);
-    fputs(",", out);
-    write_atom_if_possible(style, out, atom, negtable);
     fputs("):\n\n", out);
 
     for(i=0; i<bits; i++) {
 
       /* Three combinations that cause the bit be 1 */
 
+      /* ctr2_i :- ctr1_i+1, not ctr1_i, not ctr2_i+1. */
+
       fprintf(out, "_one_%i_", i);
       write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, " :- not _one_%i_", i);
+      fprintf(out, " :- ");
+      if(i+1<bits) {
+	fprintf(out, "_one_%i_", i+1);
+	write_atom_if_possible(style, out, atom, table);
+	fprintf(out, ", ");
+      }
+      fprintf(out, "not _one_%i_", i);
       write_atom_if_possible(style, out, atom, table);
       if(i+1<bits) {
-	fprintf(out, ", not _zero_%i_", i+1);
-	write_atom_if_possible(style, out, atom, table);
 	fprintf(out, ", not _one_%i_", i+1);
 	write_atom_if_possible(style, out, atom2, table2);
       }
-      fprintf(out, ", not ");
-      write_atom_if_possible(style, out, atom, negtable);
       fprintf(out, ".\n");
+
+      /* ctr2_i :- ctr1_i, not ctr1_i+1. */
 
       if(i+1<bits) {
 	fprintf(out, "_one_%i_", i);
 	write_atom_if_possible(style, out, atom2, table2);
-	fprintf(out, " :- not _zero_%i_", i);
+	fprintf(out, " :- ");
+	fprintf(out, "_one_%i_", i);
 	write_atom_if_possible(style, out, atom, table);
 	fprintf(out, ", not _one_%i_", i+1);
 	write_atom_if_possible(style, out, atom, table);
-	fprintf(out, ", not ");
-	write_atom_if_possible(style, out, atom, negtable);
 	fprintf(out, ".\n");
       }
+
+      /* ctr2_i :- ctr1_i, ctr2_i+1. */
 
       if(i+1<bits) {
 	fprintf(out, "_one_%i_", i);
 	write_atom_if_possible(style, out, atom2, table2);
-	fprintf(out, " :- not _zero_%i_", i);
+	fprintf(out, " :- ");
+	fprintf(out, "_one_%i_", i);
 	write_atom_if_possible(style, out, atom, table);
-	fprintf(out, ", not _zero_%i_", i+1);
+	fprintf(out, ", _one_%i_", i+1);
 	write_atom_if_possible(style, out, atom2, table2);
-	fprintf(out, ", not ");
-	write_atom_if_possible(style, out, atom, negtable);
 	fprintf(out, ".\n");
       }
-
-      /* By default, the bit is 0 */
-
-      fprintf(out, "_zero_%i_", i);
-      write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, " :- not _one_%i_", i);
-      write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, ", not ");
-      write_atom_if_possible(style, out, atom, negtable);
-      fprintf(out, ".\n");
     }
     fputs("\n", out);
 
@@ -262,27 +258,26 @@ void generate_nxt(int style, FILE *out, int bits,
 
     for(i=0; i<bits; i++) {
 
-      int cond = atom + negtable->shift;
-
       /* Three combinations that cause the bit be 1 */
 
       if(i+1<bits)
-	fprintf(out, "1 %i 4 4 %i %i %i %i\n",
-		vec2+i, vec+i, negvec+i+1, vec2+i+1, cond);
+	/* ctr2_i :- ctr1_i+1, not ctr1_i, not ctr2_i+1. */
+	fprintf(out, "1 %i 3 2 %i %i %i\n",
+		vec2+i, vec+i, vec2+i+1, vec+i+1);
       else
-	fprintf(out, "1 %i 2 2 %i %i\n", vec2+i, vec+i, cond);
+	/* Special case: ctr2_i :- not ctr1_i. */
+	fprintf(out, "1 %i 1 1 %i\n", vec2+i, vec+i);
 
       if(i+1<bits) {
-	fprintf(out, "1 %i 3 3 %i %i %i\n",
-		vec2+i, negvec+i, vec+i+1, cond);
-	fprintf(out, "1 %i 3 3 %i %i %i\n",
-		vec2+i, negvec+i, negvec2+i+1, cond);
+
+	/* ctr2_i :- ctr1_i, not ctr1_i+1. */
+	fprintf(out, "1 %i 2 1 %i %i\n",
+		vec2+i, vec+i+1, vec+i);
+
+	/* ctr2_i :- ctr1_i, ctr2_i+1. */
+	fprintf(out, "1 %i 2 0 %i %i\n",
+		vec2+i, vec+i, vec2+i+1);
       }
-
-      /* By default, the bit is 0 */
-
-      fprintf(out, "1 %i 2 2 %i %i\n", negvec2+i, vec2+i, cond);
-
     }
   }
 
@@ -290,15 +285,13 @@ void generate_nxt(int style, FILE *out, int bits,
 }
 
 /*
- * generate_zero -- Make all bits of a counter zero (conditionally)
+ * generate_clr -- Make all bits of a counter zero (conditionally)
  */
 
-void generate_clear(int style, FILE *out, int bits,
-		    int atom, ATAB *table, int vec,
-		    int body_false, int contradiction)
+void generate_clr(int style, FILE *out, int bits,
+		  int atom, ATAB *table, int vec,
+		  int body_true, int contradiction)
 {
-  int negvec = vec+bits;
-
   if(style == STYLE_READABLE) {
     int i = 0;
 
@@ -307,10 +300,10 @@ void generate_clear(int style, FILE *out, int bits,
     fputs("):\n\n", out);
 
     for(i=0; i<bits; i++) {
-      fprintf(out, "_%i :- not _zero_%i_", contradiction, i);
+      fprintf(out, "_%i :- _one_%i_", contradiction, i);
       write_atom_if_possible(style, out, atom, table);
-      fprintf(out, ", not ");
-      write_atom_if_possible(style, out, body_false, NULL);
+      fprintf(out, ", ");
+      write_atom_if_possible(style, out, body_true, NULL);
       fprintf(out, ".\n");
     }
     fputs("\n", out);
@@ -319,8 +312,8 @@ void generate_clear(int style, FILE *out, int bits,
     int i = 0;
 
     for(i=0; i<bits; i++) {
-      fprintf(out, "1 %i 2 2 %i", contradiction, negvec+i);
-      write_atom_if_possible(style, out, body_false, NULL);
+      fprintf(out, "1 %i 2 0 %i", contradiction, vec+i);
+      write_atom_if_possible(style, out, body_true, NULL);
       fprintf(out, "\n");
     }
 
@@ -330,124 +323,14 @@ void generate_clear(int style, FILE *out, int bits,
 }
 
 /*
- * generate_lthan -- Compare the values of two counters using
- *                   the lower than / greater than or equal relation
+ * generate_eq -- Compare the values of two counter using
+ *                equality / inequality relation
  */
 
-void generate_lthan(int style, FILE *out, int bits,
-	            int atom1, ATAB *table1, int vec1,
-	            int atom2, ATAB *table2, int vec2,
-		    int vec, int body_false)
-{
-  int i = 0;
-  int negvec = vec+bits;
-  int negvec1 = vec1+bits;
-  int negvec2 = vec2+bits;
-
-  /* The first bits (position 0) of vec and negvec determine answer */
-
-  if(style == STYLE_READABLE) {
-
-    fprintf(out, "%% Subprogram LTHAN_%i(", bits);
-    write_atom_if_possible(style, out, atom1, table1);
-    fputs(",", out);
-    write_atom_if_possible(style, out, atom2, table2);
-    fputs("):\n\n", out);
-
-    for(i=0; i<bits; i++) {
-
-      fprintf(out, "_lt_%i_", i);
-      write_atom_if_possible(style, out, atom1, table1);
-      fprintf(out, "_");
-      write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, " :- not _one_%i_", i);
-      write_atom_if_possible(style, out, atom1, table1);
-      fprintf(out, ", not _zero_%i_", i);
-      write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, ", not ");
-      write_atom_if_possible(style, out, body_false, NULL);
-      fprintf(out, ".\n");
-
-      fprintf(out, "_geq_%i_", i);
-      write_atom_if_possible(style, out, atom1, table1);
-      fprintf(out, "_");
-      write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, " :- not _lt_%i_", i);
-      write_atom_if_possible(style, out, atom1, table1);
-      fprintf(out, "_");
-      write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, ", not ");
-      write_atom_if_possible(style, out, body_false, NULL);
-      fprintf(out, ".\n");
-
-      if((i+1)<bits) {
-
-	fprintf(out, "_lt_%i_", i);
-	write_atom_if_possible(style, out, atom1, table1);
-	fprintf(out, "_");
-	write_atom_if_possible(style, out, atom2, table2);
-	fprintf(out, " :- not _one_%i_", i);
-	write_atom_if_possible(style, out, atom1, table1);
-	fprintf(out, ", not _one_%i_", i);
-	write_atom_if_possible(style, out, atom2, table2);
-	fprintf(out, ", not _geq_%i_", i+1);
-	write_atom_if_possible(style, out, atom1, table1);
-	fprintf(out, "_");
-	write_atom_if_possible(style, out, atom2, table2);
-	fprintf(out, ", not ");
-	write_atom_if_possible(style, out, body_false, NULL);
-	fprintf(out, ".\n");
-
-	fprintf(out, "_lt_%i_", i);
-	write_atom_if_possible(style, out, atom1, table1);
-	fprintf(out, "_");
-	write_atom_if_possible(style, out, atom2, table2);
-	fprintf(out, " :- not _zero_%i_", i);
-	write_atom_if_possible(style, out, atom1, table1);
-	fprintf(out, ", not _zero_%i_", i);
-	write_atom_if_possible(style, out, atom2, table2);
-	fprintf(out, ", not _geq_%i_", i+1);
-	write_atom_if_possible(style, out, atom1, table1);
-	fprintf(out, "_");
-	write_atom_if_possible(style, out, atom2, table2);
-	fprintf(out, ", not ");
-	write_atom_if_possible(style, out, body_false, NULL);
-	fprintf(out, ".\n");
-
-      }
-    }
-    fputs("\n", out);
-
-  } else if(style == STYLE_SMODELS) {
-
-    for(i=0; i<bits; i++) {
-
-      fprintf(out, "1 %i 3 3 %i %i %i\n",
-	      vec+i, vec1+i, negvec2+i, body_false);
-      fprintf(out, "1 %i 2 2 %i %i\n", negvec+i, vec+i, body_false);
-      if((i+1)<bits) {
-	fprintf(out, "1 %i 4 4 %i %i %i %i\n",
-		vec+i, vec1+i, vec2+i, negvec+i+1, body_false);
-	fprintf(out, "1 %i 4 4 %i %i %i %i\n",
-		vec+i, negvec1+i, negvec2+i, negvec+i+1, body_false);
-      }
-
-    }
-
-  }
-
-  return;
-}
-
-/*
- * generate_equality -- Compare the values of two counter using
- *                      equality / inequality relation
- */
-
-void generate_equality(int style, FILE *out, int bits,
-	               int atom1, ATAB *table1, int vec1,
-	               int atom2, ATAB *table2, int vec2,
-		       int eq, int body_false)
+void generate_eq(int style, FILE *out, int bits,
+                 int atom1, ATAB *table1, int vec1,
+                 int atom2, ATAB *table2, int vec2,
+                 int eq)
 {
   int i = 0;
   int negvec1 = vec1+bits;
@@ -458,9 +341,9 @@ void generate_equality(int style, FILE *out, int bits,
 
   if(style == STYLE_READABLE) {
 
-    fprintf(out, "%% Subprogram EQ_%i(", bits);
+    fprintf(out, "%% Subprogram EQ(%i, ", bits);
     write_atom_if_possible(style, out, atom1, table1);
-    fputs(",", out);
+    fputs(", ", out);
     write_atom_if_possible(style, out, atom2, table2);
     fputs("):\n\n", out);
 
@@ -474,8 +357,6 @@ void generate_equality(int style, FILE *out, int bits,
     write_atom_if_possible(style, out, atom1, table1);
     fprintf(out, "_");
     write_atom_if_possible(style, out, atom2, table2);
-    fprintf(out, ", not ");
-    write_atom_if_possible(style, out, body_false, NULL);
     fprintf(out, ".\n");
 
     for(i=0; i<bits; i++) {
@@ -486,45 +367,163 @@ void generate_equality(int style, FILE *out, int bits,
       write_atom_if_possible(style, out, atom1, table1);
       fprintf(out, "_");
       write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, " :- not _zero_%i_", i);
+      fprintf(out, " :- _one_%i_", i);
       write_atom_if_possible(style, out, atom1, table1);
       fprintf(out, ", not _one_%i_", i);
       write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, ", not ");
-      write_atom_if_possible(style, out, body_false, NULL);
       fprintf(out, ".\n");
 
       fprintf(out, "_neq_");
       write_atom_if_possible(style, out, atom1, table1);
       fprintf(out, "_");
       write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, " :- not _one_%i_", i);
-      write_atom_if_possible(style, out, atom1, table1);
-      fprintf(out, ", not _zero_%i_", i);
+      fprintf(out, " :- _one_%i_", i);
       write_atom_if_possible(style, out, atom2, table2);
-      fprintf(out, ", not ");
-      write_atom_if_possible(style, out, body_false, NULL);
+      fprintf(out, ", not _one_%i_", i);
+      write_atom_if_possible(style, out, atom1, table1);
       fprintf(out, ".\n");
     }
     fputs("\n", out);
 
   } else if(style == STYLE_SMODELS) {
 
-    fprintf(out, "1 %i 2 2 %i %i\n", eq, neq, body_false);
+    fprintf(out, "1 %i 1 1 %i\n", eq, neq);
 
     for(i=0; i<bits; i++) {
 
-	fprintf(out, "1 %i 3 3 %i %i %i\n",
-		neq, negvec1+i, vec2+i, body_false);
-	fprintf(out, "1 %i 3 3 %i %i %i\n",
-		neq, vec1+i, negvec2+i, body_false);
+      fprintf(out, "1 %i 2 1 %i %i\n", neq, vec2+i, vec1+i);
+      fprintf(out, "1 %i 2 1 %i %i\n", neq, vec1+i, vec2+i);
     }
   }
 
   return;
 }
 
-/* Miscellaneous routines */
+/*
+ * generate_lt -- Compare the values of two counters using
+ *                the lower than / greater than or equal relation
+ */
+
+void generate_lt(int style, FILE *out, int bits,
+		 int atom1, ATAB *table1, int vec1,
+		 int atom2, ATAB *table2, int vec2,
+		 int vec)
+{
+  int i = 0;
+
+  /* The first bit (position 0) of vec determines the answer */
+
+  if(style == STYLE_READABLE) {
+
+    /* Implements LT(ctr1, ctr2) */
+
+    fprintf(out, "%% Subprogram LT(%i, ", bits);
+    write_atom_if_possible(style, out, atom1, table1);
+    fputs(", ", out);
+    write_atom_if_possible(style, out, atom2, table2);
+    fputs("):\n\n", out);
+
+    for(i=0; i<bits; i++) {
+
+      /* lt(ctr1,ctr2)_i :- not ctr1_i, ctr2_i. */
+
+      fprintf(out, "_lt_%i_", i);
+      write_atom_if_possible(style, out, atom1, table1);
+      fprintf(out, "_");
+      write_atom_if_possible(style, out, atom2, table2);
+      fprintf(out, " :- _one_%i_", i);
+      write_atom_if_possible(style, out, atom2, table2);
+      fprintf(out, ", not _one_%i_", i);
+      write_atom_if_possible(style, out, atom1, table1);
+      fprintf(out, ".\n");
+
+      if((i+1)<bits) {
+
+	/* lt(ctr1,ctr2)_i :- not ctr1_i, not ctr2_i, lt(ctr1,ctr2)_i+1. */
+
+	fprintf(out, "_lt_%i_", i);
+	write_atom_if_possible(style, out, atom1, table1);
+	fprintf(out, "_");
+	write_atom_if_possible(style, out, atom2, table2);
+	fprintf(out, " :- _lt_%i_", i+1);
+	write_atom_if_possible(style, out, atom1, table1);
+	fprintf(out, "_");
+	write_atom_if_possible(style, out, atom2, table2);
+	fprintf(out, ", not _one_%i_", i);
+	write_atom_if_possible(style, out, atom1, table1);
+	fprintf(out, ", not _one_%i_", i);
+	write_atom_if_possible(style, out, atom2, table2);
+	fprintf(out, ".\n");
+
+	/* lt(ctr1,ctr2)_i :- ctr1_i, ctr2_i, lt(ctr1,ctr2)_i+1. */
+
+	fprintf(out, "_lt_%i_", i);
+	write_atom_if_possible(style, out, atom1, table1);
+	fprintf(out, "_");
+	write_atom_if_possible(style, out, atom2, table2);
+	fprintf(out, " :- _lt_%i_", i+1);
+	write_atom_if_possible(style, out, atom1, table1);
+	fprintf(out, "_");
+	write_atom_if_possible(style, out, atom2, table2);
+	fprintf(out, ", _one_%i_", i);
+	write_atom_if_possible(style, out, atom1, table1);
+	fprintf(out, ", _one_%i_", i);
+	write_atom_if_possible(style, out, atom2, table2);
+	fprintf(out, ".\n");
+
+      }
+    }
+
+  } else if(style == STYLE_SMODELS) {
+
+    for(i=0; i<bits; i++) {
+
+      /* lt(ctr1,ctr2)_i :- not ctr1_i, ctr2_i. */
+      fprintf(out, "1 %i 2 1 %i %i\n",
+	      vec+i, vec1+i, vec2+i);
+
+      if((i+1)<bits) {
+
+	/* lt(ctr1,ctr2)_i :- not ctr1_i, not ctr2_i, lt(ctr1,ctr2)_i+1. */
+	fprintf(out, "1 %i 3 2 %i %i %i\n",
+		vec+i, vec1+i, vec2+i, vec+i+1);
+
+	/* lt(ctr1,ctr2)_i :- ctr1_i, ctr2_i, lt(ctr1,ctr2)_i+1. */
+	fprintf(out, "1 %i 3 0 %i %i %i\n",
+		vec+i, vec1+i, vec2+i, vec+i+1);
+      }
+
+    }
+
+  }
+
+  return;
+}
+
+/*
+ * generate_eq_and_lt -- Generate both tests
+ */
+
+void generate_eq_and_lt(int style, FILE *out, int bits,
+			int atom, ATAB *table, int counter,
+			int atom2, ATAB *table2, int counter2,
+			int eq, int vec)
+{
+  generate_eq(style, out, bits,
+	      atom2, table2, counter2,
+	      atom, table, counter,
+	      eq);
+
+  generate_lt(style, out, bits,
+	      atom2, table2, counter2,
+	      atom, table, counter,
+	      vec);
+  return;
+}
+
+/*
+ * write_symbols_for_counters -- Print symbolic information about counters
+ */
 
 void write_symbols_for_counters(int style, FILE *out, ATAB *table,
 				OCCTAB *occtable, VTAB *vtab)
@@ -591,19 +590,6 @@ void write_symbols_for_counters(int style, FILE *out, ATAB *table,
 
 	  }
 
-	for(b=0; b<bits; b++)
-	  if(style == STYLE_READABLE) {
-
-	    fprintf(out, "%% _%i = _zero_%i_nxt_", successor+bits+b, b);
-	    write_atom(style, out, atom, table);
-	    fputs("\n", out);
-
-	  } else if(style == STYLE_SMODELS) {
-
-	    fprintf(out, "%i _zero_%i_nxt_", successor+bits+b, b);
-	    write_atom(STYLE_READABLE, out, atom, table);
-	    fputs("\n", out);
-	  }
       }
     }
 
@@ -611,3 +597,4 @@ void write_symbols_for_counters(int style, FILE *out, ATAB *table,
   }
   return;
 }
+

@@ -30,11 +30,11 @@
 #include <string.h>
 #include <libgen.h>
 
-#include "version.h"
-#include "symbol.h"
-#include "atom.h"
-#include "rule.h"
-#include "io.h"
+#include <liblp/version.h>
+#include <liblp/symbol.h>
+#include <liblp/atom.h>
+#include <liblp/rule.h>
+#include <liblp/io.h>
 
 void _version_lp2normal_c()
 {

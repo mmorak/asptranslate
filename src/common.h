@@ -27,7 +27,7 @@
 #define COMMON_H
 
 #include <inttypes.h>   /* for uint64_t */
-#include <io.h>         /* For program_name */
+#include <liblp/io.h>   /* For program_name */
 
 void output_normal(int style, FILE *out,
                    int head,

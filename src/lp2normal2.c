@@ -36,11 +36,11 @@
 #include <inttypes.h>   /* for uint64_t */
 #include <ctype.h>      /* for isdigit */
 
-#include "version.h"
-#include "symbol.h"
-#include "atom.h"
-#include "rule.h"
-#include "io.h"
+#include <liblp/version.h>
+#include <liblp/symbol.h>
+#include <liblp/atom.h>
+#include <liblp/rule.h>
+#include <liblp/io.h>
 
 /* Configuration and includes specific to this project */
 

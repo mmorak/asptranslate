@@ -29,7 +29,7 @@
 #include <assert.h>
 #include <string.h>
 
-#include "version.h"
+#include <liblp/version.h>
 
 int **graph;
 int **graphAdj;
